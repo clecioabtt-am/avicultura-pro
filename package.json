@@ -1,24 +1,5 @@
 {
-  "name": "avicultura-pro",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
-    "deploy": "npm run build && wrangler deploy",
-    "db:local": "wrangler d1 execute avicultura-pro-db --local --file=./schema.sql",
-    "db:remote": "wrangler d1 execute avicultura-pro-db --remote --file=./schema.sql"
-  },
-  "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "lucide-react": "latest",
-    "wrangler": "latest"
-  },
-  "devDependencies": {}
+  "name":"granja-amazonas","private":true,"version":"1.0.0","type":"module",
+  "scripts":{"dev":"vite","build":"vite build","preview":"vite preview","deploy":"npm run build && wrangler deploy","db:local":"wrangler d1 execute granja-amazonas-db --local --file=./schema.sql","db:remote":"wrangler d1 execute granja-amazonas-db --remote --file=./schema.sql"},
+  "dependencies":{"@vitejs/plugin-react":"latest","vite":"latest","typescript":"latest","react":"latest","react-dom":"latest","lucide-react":"latest","wrangler":"latest"},"devDependencies":{}
 }

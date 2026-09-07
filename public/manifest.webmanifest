@@ -1,3 +1,1 @@
-{
-  "name":"Avicultura Pro","short_name":"AviculturaPro","start_url":"/","display":"standalone","background_color":"#f5f7f6","theme_color":"#173c2f","icons":[]
-}
+{"name":"Granja Amazonas - Gestão Avícola","short_name":"Granja Amazonas","start_url":"/","display":"standalone","background_color":"#0b3b22","theme_color":"#0b3b22","icons":[{"src":"/icon-512.jpg","sizes":"512x512","type":"image/jpeg"}]}
