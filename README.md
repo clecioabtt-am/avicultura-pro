@@ -49,3 +49,19 @@ A logo fornecida está em `public/logo.jpg`. Depois do primeiro acesso, a propri
 
 ## Relatórios
 A tela de Relatórios permite períodos diário, semanal e mensal, exportação CSV/planilha e impressão/Salvar como PDF pelo navegador.
+
+## Correção 1.0.1 — criação do primeiro acesso
+
+Esta versão corrige o erro HTTP 500 em `POST /api/auth/setup` observado na configuração inicial.
+
+Alterações principais:
+- criação da proprietária passa a criar a sessão no mesmo request;
+- a interface não executa um segundo login após o setup;
+- inicialização de autenticação verifica e corrige a coluna `password_salt` quando necessário;
+- tabela `sessions` é garantida antes da autenticação;
+- hashing de senha recebeu compatibilidade com a versão anterior e fallback para ambientes com limitação do PBKDF2;
+- Worker e scripts foram alinhados ao projeto `avicultura-pro` e banco `avicultura-pro-db`.
+
+### Atenção ao binding D1
+
+Confirme no `wrangler.jsonc` se o `database_id` corresponde ao seu banco **avicultura-pro-db** no Cloudflare. O nome do binding deve permanecer exatamente `DB`.

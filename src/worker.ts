@@ -4,7 +4,48 @@ const json=(data:any,status=200,headers:HeadersInit={})=>new Response(JSON.strin
 const b64=(u8:Uint8Array)=>btoa(String.fromCharCode(...u8));
 const hex=(u8:Uint8Array)=>[...u8].map(b=>b.toString(16).padStart(2,'0')).join('');
 async function sha(s:string){return hex(new Uint8Array(await crypto.subtle.digest('SHA-256',enc.encode(s))))}
-async function hashPassword(p:string,salt?:string){const s=salt||b64(crypto.getRandomValues(new Uint8Array(16)));const key=await crypto.subtle.importKey('raw',enc.encode(p),'PBKDF2',false,['deriveBits']);const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:enc.encode(s),iterations:120000,hash:'SHA-256'},key,256);return {hash:hex(new Uint8Array(bits)),salt:s}}
+const PBKDF2_ITERATIONS=25000;
+async function hashPassword(p:string,salt?:string){
+ const s=salt||b64(crypto.getRandomValues(new Uint8Array(16)));
+ try{
+  const key=await crypto.subtle.importKey('raw',enc.encode(p),'PBKDF2',false,['deriveBits']);
+  const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:enc.encode(s),iterations:PBKDF2_ITERATIONS,hash:'SHA-256'},key,256);
+  return {hash:`pbkdf2$${PBKDF2_ITERATIONS}$${hex(new Uint8Array(bits))}`,salt:s};
+ }catch{
+  // Fallback compatível com runtimes que limitem PBKDF2. Mantém salt individual.
+  return {hash:`sha256$${await sha(`${s}:${p}`)}`,salt:s};
+ }
+}
+async function verifyPassword(password:string,storedHash:string,salt:string){
+ if(!storedHash||!salt)return false;
+ if(storedHash.startsWith('pbkdf2$')){
+  const parts=storedHash.split('$'),iterations=Number(parts[1])||PBKDF2_ITERATIONS;
+  const key=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveBits']);
+  const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:enc.encode(salt),iterations,hash:'SHA-256'},key,256);
+  return hex(new Uint8Array(bits))===parts[2];
+ }
+ if(storedHash.startsWith('sha256$'))return storedHash===`sha256$${await sha(`${salt}:${password}`)}`;
+ // Compatibilidade com hashes PBKDF2 da versão anterior (hex puro, 120000 iterações).
+ try{
+  const key=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveBits']);
+  const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:enc.encode(salt),iterations:120000,hash:'SHA-256'},key,256);
+  return hex(new Uint8Array(bits))===storedHash;
+ }catch{return false}
+}
+async function ensureAuthSchema(env:Env){
+ await env.DB.prepare(`CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id INTEGER NOT NULL,expires_at TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)`).run();
+ const cols=await env.DB.prepare(`PRAGMA table_info(users)`).all<any>();
+ if(!cols.results.some((x:any)=>x.name==='password_salt')){
+  await env.DB.prepare(`ALTER TABLE users ADD COLUMN password_salt TEXT`).run();
+ }
+}
+async function createSession(userId:number,env:Env){
+ const token=b64(crypto.getRandomValues(new Uint8Array(32))).replaceAll('=','');
+ const th=await sha(token);
+ await env.DB.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,datetime('now','+30 day'))").bind(th,userId).run();
+ return token;
+}
+const sessionCookie=(token:string)=>`avic_session=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000`;
 const cookie=(r:Request,n:string)=>{const m=(r.headers.get('cookie')||'').match(new RegExp('(?:^|; )'+n+'=([^;]*)'));return m?decodeURIComponent(m[1]):''};
 async function currentUser(r:Request,env:Env){const token=cookie(r,'avic_session');if(!token)return null;const th=await sha(token);return await env.DB.prepare("SELECT u.id,u.name,u.username,u.role,u.active FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>datetime('now') AND u.active=1").bind(th).first<any>();}
 async function body(r:Request){return await r.json() as any}
@@ -28,8 +69,26 @@ async function dashboard(env:Env){
 export default {async fetch(request:Request,env:Env){try{
  const u=new URL(request.url), p=u.pathname, m=request.method;
  if(p==='/api/auth/status'){const count=await env.DB.prepare('SELECT COUNT(*) n FROM users').first<any>();return json({setupRequired:num(count?.n)===0,user:await currentUser(request,env)})}
- if(p==='/api/auth/setup'&&m==='POST'){const c=await env.DB.prepare('SELECT COUNT(*) n FROM users').first<any>();if(num(c?.n)>0)return json({error:'Configuração inicial já realizada.'},409);const b=await body(request);if(!b.name||!b.username||String(b.password||'').length<6)return json({error:'Informe nome, usuário e senha com pelo menos 6 caracteres.'},400);const hp=await hashPassword(String(b.password));await env.DB.prepare("INSERT INTO users(name,username,password_hash,password_salt,role) VALUES(?,?,?,?, 'proprietaria')").bind(b.name,String(b.username).trim().toLowerCase(),hp.hash,hp.salt).run();return json({ok:true},201)}
- if(p==='/api/auth/login'&&m==='POST'){const b=await body(request);const usr=await env.DB.prepare('SELECT * FROM users WHERE username=? AND active=1').bind(String(b.username||'').trim().toLowerCase()).first<any>();if(!usr)return json({error:'Usuário ou senha inválidos.'},401);const hp=await hashPassword(String(b.password||''),usr.password_salt);if(hp.hash!==usr.password_hash)return json({error:'Usuário ou senha inválidos.'},401);const token=b64(crypto.getRandomValues(new Uint8Array(32))).replaceAll('=','');const th=await sha(token);await env.DB.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,datetime('now','+30 day'))").bind(th,usr.id).run();return json({ok:true,user:{id:usr.id,name:usr.name,username:usr.username,role:usr.role}},200,{'set-cookie':`avic_session=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000`})}
+ if(p==='/api/auth/setup'&&m==='POST'){
+  await ensureAuthSchema(env);
+  const c=await env.DB.prepare('SELECT COUNT(*) n FROM users').first<any>();
+  if(num(c?.n)>0)return json({error:'Configuração inicial já realizada.'},409);
+  const b=await body(request),name=String(b.name||'').trim(),username=String(b.username||'').trim().toLowerCase(),password=String(b.password||'');
+  if(!name||!username||password.length<6)return json({error:'Informe nome, usuário e senha com pelo menos 6 caracteres.'},400);
+  const hp=await hashPassword(password);
+  const ins=await env.DB.prepare("INSERT INTO users(name,username,password_hash,password_salt,role,active) VALUES(?,?,?,?, 'proprietaria',1)").bind(name,username,hp.hash,hp.salt).run();
+  const id=Number(ins.meta.last_row_id);
+  const token=await createSession(id,env);
+  return json({ok:true,user:{id,name,username,role:'proprietaria'}},201,{'set-cookie':sessionCookie(token)});
+ }
+ if(p==='/api/auth/login'&&m==='POST'){
+  await ensureAuthSchema(env);
+  const b=await body(request),username=String(b.username||'').trim().toLowerCase();
+  const usr=await env.DB.prepare('SELECT * FROM users WHERE username=? AND active=1').bind(username).first<any>();
+  if(!usr||!await verifyPassword(String(b.password||''),String(usr.password_hash||''),String(usr.password_salt||'')))return json({error:'Usuário ou senha inválidos.'},401);
+  const token=await createSession(Number(usr.id),env);
+  return json({ok:true,user:{id:usr.id,name:usr.name,username:usr.username,role:usr.role}},200,{'set-cookie':sessionCookie(token)});
+ }
  if(p==='/api/auth/logout'&&m==='POST'){const t=cookie(request,'avic_session');if(t)await env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(await sha(t)).run();return json({ok:true},200,{'set-cookie':'avic_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0'})}
  if(!p.startsWith('/api/'))return env.ASSETS.fetch(request);
  const user=await currentUser(request,env);if(!user)return json({error:'Não autenticado'},401);
